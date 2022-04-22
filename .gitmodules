@@ -1,0 +1,3 @@
+[submodule "ROS-Quadcopter-Simulation"]
+	path = ROS-Quadcopter-Simulation
+	url = https://github.com/NishanthARao/ROS-Quadcopter-Simulation.git
