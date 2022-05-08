@@ -29,6 +29,7 @@ Iqy = 2*m_L*arm_L + (1/6.)*m_b*(a ** 2) + 4*m_p*arm_L
 Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b*((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
 
 global R
+global coms = numpy.array([0, 0, 0, 0])
 
 aird = 1.2041
 k = 3.33
@@ -176,6 +177,7 @@ def control_kwad(msg, args):
 
     # Assign the Float64MultiArray object to 'f' as we will have to send data of motor velocities to gazebo in this format
     #f = Float64MultiArray()
+    global coms
 
     # Convert the quaternion data to roll, pitch, yaw data
     # The model_states contains the position, orientation, velocities of all objects in gazebo. In the simulation, there are objects like: ground, Contruction_cone, quadcopter (named as 'Kwad') etc. So 'msg.pose[ind]' will access the 'Kwad' object's pose information i.e the quadcopter's pose.
@@ -200,7 +202,7 @@ def control_kwad(msg, args):
     ]).reshape((12,1))
     # send roll, pitch, yaw data to PID() for attitude-stabilisation, along with 'f', to obtain 'fUpdated'
     # Alternatively, you can add your 'control-file' with other algorithms such as Reinforcement learning, and import the main function here instead of PID().
-    fUpdated = MPC(state, np.array([0, 0, 0, 0]) #np.array(f.data))
+    fUpdated = MPC(state, coms) #np.array(f.data))
 
     # The object args contains the tuple of objects (velPub, err_rollPub, err_pitchPub, err_yawPub. publish the information to namespace.
     args.publish(fUpdated)
@@ -228,7 +230,7 @@ rospy.init_node("Control")
 # initialte publisher velPub that will publish the velocities of individual BLDC motors
 velPub = rospy.Publisher('/Kwad/joint_motor_controller/command', Float64MultiArray, queue_size=4)
 
-initCom = Float64MultiArray
+initCom = Float64MultiArray()
 initCom.data = [0, 0, 0, 0]
 velPub.publish(initCom)
 
