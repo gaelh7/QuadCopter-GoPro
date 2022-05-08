@@ -1,0 +1,8 @@
+prefix=/home/rog/jcassady/QuadCopter-GoPro/install
+
+Name: fly_bot
+Description: Description of fly_bot
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

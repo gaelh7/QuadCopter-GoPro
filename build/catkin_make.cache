@@ -1,0 +1,2 @@
+MPC:fly_bot
+-DCATKIN_DEVEL_PREFIX=/home/rog/jcassady/QuadCopter-GoPro/devel -DCMAKE_INSTALL_PREFIX=/home/rog/jcassady/QuadCopter-GoPro/install -G Unix Makefiles

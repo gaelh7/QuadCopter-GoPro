@@ -1,4 +1,4 @@
-# !/usr/bin/env python
+# !/usr/bin/env python3
 # ---------------------------------------------------
 from pyexpat.errors import XML_ERROR_ABORTED
 import rospy
@@ -26,7 +26,7 @@ h = 0.01
 totalMass = 0.5 # could be very wrong
 Ip = m_p * r_p
 Iqy = 2*m_L*arm_L + (1/6.)*m_b*(a ** 2) + 4*m_p*arm_L
-Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
+Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b*((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
 
 global R
 
@@ -63,10 +63,10 @@ def v0(state):
     Ry = np.array([np.cos(state[7]), 0, np.sin(state[7]), 0, 1, 0, -np.sin(state[7]), 0, np.cos(state[7])]).reshape(3,3)
     Rz = np.array([np.cos(state[8]), -np.sin(state[8]), 0, np.sin(state[8]), np.cos(state[8]), 0, 0, 0, 1]).reshape(3,3)
 
-    R = Rz @ Ry @ Rx
+    R = np.matmul(Rz, Ry, Rx)
 
     # Generate Unit vector of the Kwad's angular orientation
-    angleUnitVec = R @ unitVec
+    angleUnitVec = np.matmul(R, unitVec)
 
     # Velocity Magnitude
     velocityMag = np.linalg.norm(state[3:6])
@@ -75,33 +75,36 @@ def v0(state):
     velocityUnitVec = np.array([state[3], state[4], state[5]])/velocityMag
 
     # Angle between Velocity and orientation of negative thrust vector
-    deltaAngle = np.arccos(np.dot(angleUnitVec, velocityUnitVec))
+    deltaAngle = np.arccos(np.dot(angleUnitVec.reshape(3), velocityUnitVec.reshape(3)))
 
     # Scale the air velocity using angle
     return np.cos(deltaAngle)*velocityMag
 
 def forces(state, commands):
     # Compute the upward thrust from every motor
-    return 0.5*aird*np.pi*(r_p**2)*k*commands(k*commands + 2*v0(state))
+    return 0.5*aird*np.pi*(r_p**2)*k*commands*(k*commands + 2*v0(state))
 
 def stepDynamics(state, commands, dt):
     # Using our model, propagate the dynamics forward in time
     f = forces(state, commands)
 
     # First update according to state dynamics
-    newState = A(dt) @ state
+    newState = np.matmul(A(dt), state)
 
     # Then update based on commands
     ang_mom = Ip*(commands[0] + commands[3] - commands[1] - commands[2])
     dyaw_local = ang_mom/Iqy
     dpitch_local = dt*np.sqrt(0.5)*(f[1] + f[3] - f[0] - f[2])/Iqpr
     droll_local = dt*np.sqrt(0.5)*(f[0] + f[2] - f[1] - f[3])/Iqpr
-    glob_c = np.linalg.inv(R) @ np.array([droll_local, dpitch_local, dyaw_local])
-    newState[9:11] += dt*glob_c[0:2]
+    glob_c = np.matmul(R, np.array([droll_local, dpitch_local, dyaw_local]))
+
+    newState[9] += dt*glob_c[0]
+    newState[10] += dt*glob_c[1]
+
     newState[11] = glob_c[2]
 
     unitVec = np.array([0,0,1]).reshape(3,1)
-    angleUnitVec = R @ unitVec
+    angleUnitVec = np.matmul(R, unitVec).reshape(3)
 
     # Total thrust from props
     fTotal = np.sum(f)
@@ -116,12 +119,12 @@ def stepDynamics(state, commands, dt):
 def cost(state):
     # Calculate position cost based off of how far to goal
     global goalX, goalY, goalZ, goalRoll, goalPitch, goalYaw
-    xErr = state[0][0] - goalX
-    yErr = state[0][1] - goalY
-    zErr = state[0][2] - goalZ
-    rollErr = state[0][6] - goalRoll
-    pitchErr = state[0][7] - goalPitch
-    yawErr = state[0][8] - goalYaw
+    xErr = state[0] - goalX
+    yErr = state[1] - goalY
+    zErr = state[2] - goalZ
+    rollErr = state[6] - goalRoll
+    pitchErr = state[7] - goalPitch
+    yawErr = state[8] - goalYaw
 
     # Tuning Weights on different State Vars
     coeffs = [1, 1, 1, 1, 1, 1]
@@ -147,23 +150,24 @@ def MPC(state, commands):
         newState = state
         # Propagate dynamics 3x
         for _ in range(3):
-            newState = stepDynamics(newState, [
+            newState = stepDynamics(newState, np.array([
                 commands[0]+frontRightDU,
                 commands[1]+frontLeftDU,
                 commands[2]+backLeftDU,
-                commands[3]+backRightDU], dt)
-        cost = cost(newState)
+                commands[3]+backRightDU]), dt)
+        primCost = cost(newState)
         # Find the min
-        if cost < minCost:
-            minCost = cost
+        if primCost < minCost:
+            minCost = primCost
             bestPrims = [frontRightDU, frontLeftDU, backLeftDU, backRightDU]
 
-    return [
+    retArr = Float64MultiArray()
+    retArr.data = [
         commands[0]+bestPrims[0],
         commands[1]+bestPrims[1],
         commands[2]+bestPrims[2],
         commands[3]+bestPrims[3]]
-
+    return retArr
 
 # ---------------------------------------------------
 def control_kwad(msg, args):
@@ -171,7 +175,7 @@ def control_kwad(msg, args):
     global roll, pitch, yaw
 
     # Assign the Float64MultiArray object to 'f' as we will have to send data of motor velocities to gazebo in this format
-    f = Float64MultiArray()
+    #f = Float64MultiArray()
 
     # Convert the quaternion data to roll, pitch, yaw data
     # The model_states contains the position, orientation, velocities of all objects in gazebo. In the simulation, there are objects like: ground, Contruction_cone, quadcopter (named as 'Kwad') etc. So 'msg.pose[ind]' will access the 'Kwad' object's pose information i.e the quadcopter's pose.
@@ -196,7 +200,7 @@ def control_kwad(msg, args):
     ]).reshape((12,1))
     # send roll, pitch, yaw data to PID() for attitude-stabilisation, along with 'f', to obtain 'fUpdated'
     # Alternatively, you can add your 'control-file' with other algorithms such as Reinforcement learning, and import the main function here instead of PID().
-    fUpdated = MPC(state, f)
+    fUpdated = MPC(state, np.array([0, 0, 0, 0]) #np.array(f.data))
 
     # The object args contains the tuple of objects (velPub, err_rollPub, err_pitchPub, err_yawPub. publish the information to namespace.
     args.publish(fUpdated)
@@ -223,6 +227,10 @@ rospy.init_node("Control")
 
 # initialte publisher velPub that will publish the velocities of individual BLDC motors
 velPub = rospy.Publisher('/Kwad/joint_motor_controller/command', Float64MultiArray, queue_size=4)
+
+initCom = Float64MultiArray
+initCom.data = [0, 0, 0, 0]
+velPub.publish(initCom)
 
 GoalSub = rospy.Subscriber('/Kwad/goal', Float64MultiArray, processGoal)
 
