@@ -29,7 +29,7 @@ Iqy = 2*m_L*arm_L + (1/6.)*m_b*(a ** 2) + 4*m_p*arm_L
 Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b*((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
 
 global R
-global coms = numpy.array([0, 0, 0, 0])
+global coms
 
 aird = 1.2041
 k = 3.33
@@ -142,7 +142,7 @@ def cost(state):
 
 def MPC(state, commands):
     # At the current state, try out a combination of primatives and evaluate the cost after propagating the dynamics forward
-    uPrims = [-2, -1, 0, 1, 2]
+    uPrims = [-7, -3, 0, 3, 7]
     minCost = 999999
     bestPrims = [0, 0, 0, 0]
     dt = 0.1
@@ -150,7 +150,7 @@ def MPC(state, commands):
     for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
         newState = state
         # Propagate dynamics 3x
-        for _ in range(3):
+        for _ in range(1):
             newState = stepDynamics(newState, np.array([
                 commands[0]+frontRightDU,
                 commands[1]+frontLeftDU,
@@ -168,6 +168,12 @@ def MPC(state, commands):
         commands[1]+bestPrims[1],
         commands[2]+bestPrims[2],
         commands[3]+bestPrims[3]]
+    global coms
+    coms = np.array([
+        commands[0]+bestPrims[0],
+        commands[1]+bestPrims[1],
+        commands[2]+bestPrims[2],
+        commands[3]+bestPrims[3]])
     return retArr
 
 # ---------------------------------------------------
@@ -219,10 +225,12 @@ def processGoal(msg):
     goalX = msg.data[0]
     goalY = msg.data[1]
     goalZ = msg.data[2]
-    goalRoll = msg.data[3]
-    goalPitch = msg.data[4]
-    goalYaw = msg.data[5]
+    goalYaw = msg.data[3]
 
+
+global coms
+coms = np.array([50, -50, 50, -50])
+print("here")
 
 # Initiate the node that will control the gazebo model
 rospy.init_node("Control")
@@ -230,9 +238,9 @@ rospy.init_node("Control")
 # initialte publisher velPub that will publish the velocities of individual BLDC motors
 velPub = rospy.Publisher('/Kwad/joint_motor_controller/command', Float64MultiArray, queue_size=4)
 
-initCom = Float64MultiArray()
-initCom.data = [0, 0, 0, 0]
-velPub.publish(initCom)
+# initCom = Float64MultiArray()
+# initCom.data = [0, 0, 0, 0]
+# velPub.publish(initCom)
 
 GoalSub = rospy.Subscriber('/Kwad/goal', Float64MultiArray, processGoal)
 
