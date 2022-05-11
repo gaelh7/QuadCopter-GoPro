@@ -17,17 +17,21 @@ goalRoll = 0
 goalPitch = 0
 goalYaw = 0
 
-m_p = 0.0055
-r_p = 0.20 # might be incorrect, need to check
-m_L = 0.01 # might also be incorrect
-m_b = 0.01
-arm_L = 0.02
-a = 0.12
-h = 0.01
-totalMass = 0.5 # could be very wrong
-Ip = m_p * r_p
+m_p = 0.0055 # Mass of propeller (kg)
+r_p = 0.20 # Radius of propeller (m)
+m_L = 0.01 # Mass of quadcopter arm (kg)
+m_b = 0.01 # Mass of the central box (kg)
+arm_L = 0.02 # Length of arm (m)
+a = 0.12 # Side length of box (m)
+h = 0.01 # Height of box (m)
+totalMass = 0.5 # (kg)
+Ip = m_p * r_p # Moment of inertia of propellors
+
+# Total moment of inertia about local z-axis
 Iqy = 2*m_L*arm_L + (1/6.)*m_b*(a ** 2) + 4*m_p*arm_L
-inv_Iqy = Iqy**(-1)
+inv_Iqy = Iqy**(-1) # Precompute inverse for speed
+
+# Total moment of inertia about local x and y-axes
 Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b*((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
 inv_Iqpr = Iqpr**(-1)
 
@@ -35,7 +39,7 @@ global R
 global coms
 
 aird = 1.2041
-k = 3.33 # TODO: The hell is this?
+k = 1.05 # TODO: The hell is this?
 
 def A(dt):
     # x, y, z, dx, dy, dz, rl, pt, yw, drl, dpt, dyw
@@ -71,22 +75,7 @@ def v0(state):
 
     # Generate Unit vector of the Kwad's angular orientation
     angleUnitVec = np.matmul(R, unitVec)
-
-    # TODO: Isn't this the same as below?
-    # TODO: Also, shouldn't it be negative?
-    return -np.dot(angleUnitVec.reshape(3), state[3:6])
-
-    # # Velocity Magnitude
-    # velocityMag = np.linalg.norm(state[3:6])
-
-    # # Scaled to Unit Vector
-    # velocityUnitVec = np.array([state[3], state[4], state[5]])/velocityMag
-
-    # # Angle between Velocity and orientation of negative thrust vector
-    # deltaAngle = np.arccos(np.dot(angleUnitVec.reshape(3), velocityUnitVec.reshape(3)))
-
-    # # Scale the air velocity using angle
-    # return np.cos(deltaAngle)*velocityMag
+    return np.dot(angleUnitVec.reshape(3), state[3:6])
 
 def forces(state, commands):
     # Compute the upward thrust from every motor
@@ -99,8 +88,9 @@ def stepDynamics(state, commands, dt):
     newState = np.copy(state)
 
     # Then update based on commands
-    ang_mom = Ip*(commands[0] + commands[3] - commands[1] - commands[2])
-    dyaw_local = ang_mom*inv_Iqy # TODO: Shouldn't this be an acceleration
+    dcommands = commands - coms
+    dang_mom = Ip*(dcommands[0] + dcommands[3] - dcommands[1] - dcommands[2])
+    dyaw_local = dang_mom*inv_Iqy
     dpitch_local = dt*np.sqrt(0.5)*(f[1] + f[3] - f[0] - f[2])*inv_Iqpr
     droll_local = dt*np.sqrt(0.5)*(f[0] + f[2] - f[1] - f[3])*inv_Iqpr
 
@@ -109,7 +99,7 @@ def stepDynamics(state, commands, dt):
 
     newState[9] += glob_c[0]
     newState[10] += glob_c[1]
-    newState[11] = glob_c[2]
+    newState[11] += glob_c[2]
 
     unitVec = np.array([0,0,1]).reshape(3,1)
     angleUnitVec = np.matmul(R, unitVec).reshape(3)
@@ -136,7 +126,7 @@ def cost(state):
     yawErr = state[8] - goalYaw
 
     # Tuning Weights on different State Vars
-    coeffs = [1, 1, 1, 0, 0, 0]
+    coeffs = [1, 1, 1, 0, 0, 1]
 
     cost = \
         coeffs[0]*abs(xErr) + \
@@ -146,7 +136,7 @@ def cost(state):
         coeffs[4]*abs(pitchErr) + \
         coeffs[5]*abs(yawErr)
 
-    return cost
+    return float(cost)
 
 def step(state, commands, dt):
     def func((frontRightDU, frontLeftDU, backRightDU, backLeftDU)):
@@ -166,36 +156,14 @@ def MPC(state, commands):
     global coms
     # At the current state, try out a combination of primatives and evaluate the cost after propagating the dynamics forward
     uPrims = [-7, -3, 0, 3, 7] # TODO: Maybe include smaller primitives also?
-    minCost = None
-    bestPrims = None
     dt = 0.1
-    print()
-    # For each combination of primitives
-    # This should be much faster
 
     pool = ThreadPool(20)
+    # For each combination of primitives
     steps = pool.map(step(state, commands, dt), product(uPrims, repeat=4))
-    _, bestPrims = min(steps, key=(lambda (cost, _) : cost))
+    _, bestPrims = min(steps, key=(lambda x : x[0]))
     pool.close()
     pool.terminate()
-
-
-    # for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
-    #     newState = state
-    #     # Propagate dynamics 3x
-    #     new_com = np.array([
-    #         commands[0]+frontRightDU,
-    #         commands[1]+frontLeftDU,
-    #         commands[2]+backLeftDU,
-    #         commands[3]+backRightDU])
-    #     for _ in range(1):
-    #         newState = stepDynamics(newState, new_com, dt)
-    #     primCost = cost(newState)
-    #     print(newState)
-    #     # Find the min
-    #     if minCost is None or primCost < minCost:
-    #         minCost = primCost
-    #         bestPrims = new_com
 
     retArr = Float64MultiArray()
     retArr.data = bestPrims.tolist()
@@ -255,7 +223,6 @@ def processGoal(msg):
     goalYaw = msg.data[3]
 
 coms = np.array([50, -50, 50, -50])
-print("here")
 
 # Initiate the node that will control the gazebo model
 rospy.init_node("Control")
