@@ -173,9 +173,12 @@ def MPC(state, commands):
     # For each combination of primitives
     # This should be much faster
 
-    with ThreadPool(20) as pool:
-        steps = pool.map(step(state, commands, dt), product(uPrims, repeat=4))
-        _, bestPrims = min(steps, key=(lambda (cost, _) : cost))
+    pool = ThreadPool(20)
+    steps = pool.map(step(state, commands, dt), product(uPrims, repeat=4))
+    _, bestPrims = min(steps, key=(lambda (cost, _) : cost))
+    pool.close()
+    pool.terminate()
+
 
     # for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
     #     newState = state
