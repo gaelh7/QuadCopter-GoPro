@@ -128,7 +128,7 @@ def cost(state):
     yawErr = state[8] - goalYaw
 
     # Tuning Weights on different State Vars
-    coeffs = [1, 1, 1, 1, 1, 1]
+    coeffs = [1, 1, 1, 0, 0, 0]
 
     cost = \
         coeffs[0]*abs(xErr) + \
@@ -146,6 +146,7 @@ def MPC(state, commands):
     minCost = 999999
     bestPrims = [0, 0, 0, 0]
     dt = 0.1
+    print()
     # For each combination of primitives
     for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
         newState = state
@@ -157,6 +158,7 @@ def MPC(state, commands):
                 commands[2]+backLeftDU,
                 commands[3]+backRightDU]), dt)
         primCost = cost(newState)
+        print(newState)
         # Find the min
         if primCost < minCost:
             minCost = primCost
@@ -208,7 +210,8 @@ def control_kwad(msg, args):
     ]).reshape((12,1))
     # send roll, pitch, yaw data to PID() for attitude-stabilisation, along with 'f', to obtain 'fUpdated'
     # Alternatively, you can add your 'control-file' with other algorithms such as Reinforcement learning, and import the main function here instead of PID().
-    fUpdated = MPC(state, coms) #np.array(f.data))
+    steadyComs = np.array([50, -50, 50, -50])
+    fUpdated = MPC(state, steadyComs) #np.array(f.data))
 
     # The object args contains the tuple of objects (velPub, err_rollPub, err_pitchPub, err_yawPub. publish the information to namespace.
     args.publish(fUpdated)
