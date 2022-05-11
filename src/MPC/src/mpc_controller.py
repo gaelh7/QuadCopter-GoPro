@@ -8,6 +8,7 @@ from geometry_msgs.msg import Pose
 from tf.transformations import euler_from_quaternion
 import numpy as np
 from itertools import product
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 goalX = 0
 goalY = 0
@@ -26,13 +27,15 @@ h = 0.01
 totalMass = 0.5 # could be very wrong
 Ip = m_p * r_p
 Iqy = 2*m_L*arm_L + (1/6.)*m_b*(a ** 2) + 4*m_p*arm_L
+inv_Iqy = Iqy**(-1)
 Iqpr = np.sqrt(2)*m_L*arm_L + (1/12.)*m_b*((a**2)+(h**2)) + 2*np.sqrt(2)*m_p*arm_L
+inv_Iqpr = Iqpr**(-1)
 
 global R
 global coms
 
 aird = 1.2041
-k = 3.33
+k = 3.33 # TODO: The hell is this?
 
 def A(dt):
     # x, y, z, dx, dy, dz, rl, pt, yw, drl, dpt, dyw
@@ -69,17 +72,21 @@ def v0(state):
     # Generate Unit vector of the Kwad's angular orientation
     angleUnitVec = np.matmul(R, unitVec)
 
-    # Velocity Magnitude
-    velocityMag = np.linalg.norm(state[3:6])
+    # TODO: Isn't this the same as below?
+    # TODO: Also, shouldn't it be negative?
+    return -np.dot(angleUnitVec.reshape(3), state[3:6])
 
-    # Scaled to Unit Vector
-    velocityUnitVec = np.array([state[3], state[4], state[5]])/velocityMag
+    # # Velocity Magnitude
+    # velocityMag = np.linalg.norm(state[3:6])
 
-    # Angle between Velocity and orientation of negative thrust vector
-    deltaAngle = np.arccos(np.dot(angleUnitVec.reshape(3), velocityUnitVec.reshape(3)))
+    # # Scaled to Unit Vector
+    # velocityUnitVec = np.array([state[3], state[4], state[5]])/velocityMag
 
-    # Scale the air velocity using angle
-    return np.cos(deltaAngle)*velocityMag
+    # # Angle between Velocity and orientation of negative thrust vector
+    # deltaAngle = np.arccos(np.dot(angleUnitVec.reshape(3), velocityUnitVec.reshape(3)))
+
+    # # Scale the air velocity using angle
+    # return np.cos(deltaAngle)*velocityMag
 
 def forces(state, commands):
     # Compute the upward thrust from every motor
@@ -89,19 +96,19 @@ def stepDynamics(state, commands, dt):
     # Using our model, propagate the dynamics forward in time
     f = forces(state, commands)
 
-    # First update according to state dynamics
-    newState = np.matmul(A(dt), state)
+    newState = np.copy(state)
 
     # Then update based on commands
     ang_mom = Ip*(commands[0] + commands[3] - commands[1] - commands[2])
-    dyaw_local = ang_mom/Iqy
-    dpitch_local = dt*np.sqrt(0.5)*(f[1] + f[3] - f[0] - f[2])/Iqpr
-    droll_local = dt*np.sqrt(0.5)*(f[0] + f[2] - f[1] - f[3])/Iqpr
+    dyaw_local = ang_mom*inv_Iqy # TODO: Shouldn't this be an acceleration
+    dpitch_local = dt*np.sqrt(0.5)*(f[1] + f[3] - f[0] - f[2])*inv_Iqpr
+    droll_local = dt*np.sqrt(0.5)*(f[0] + f[2] - f[1] - f[3])*inv_Iqpr
+
+    # TODO: Should we use a different rotation matrix for angles.
     glob_c = np.matmul(R, np.array([droll_local, dpitch_local, dyaw_local]))
 
-    newState[9] += dt*glob_c[0]
-    newState[10] += dt*glob_c[1]
-
+    newState[9] += glob_c[0]
+    newState[10] += glob_c[1]
     newState[11] = glob_c[2]
 
     unitVec = np.array([0,0,1]).reshape(3,1)
@@ -115,7 +122,8 @@ def stepDynamics(state, commands, dt):
     newState[4] += dt*(fTotal*np.dot(angleUnitVec,[0,1,0])/totalMass)
     newState[5] += dt*(-9.81 + fTotal*np.dot(angleUnitVec,[0,0,1])/totalMass)
 
-    return newState
+    # Now update according to state dynamics
+    return np.matmul(A(dt), newState)
 
 def cost(state):
     # Calculate position cost based off of how far to goal
@@ -140,42 +148,54 @@ def cost(state):
 
     return cost
 
+def step(state, commands, dt):
+    def func(frontRightDU, frontLeftDU, backRightDU, backLeftDU):
+        newState = state
+        # Propagate dynamics 3x
+        new_com = np.array([
+            commands[0]+frontRightDU,
+            commands[1]+frontLeftDU,
+            commands[2]+backLeftDU,
+            commands[3]+backRightDU])
+        for _ in range(1):
+            newState = stepDynamics(newState, new_com, dt)
+        return cost(newState), new_com
+    return func
+
 def MPC(state, commands):
+    global coms
     # At the current state, try out a combination of primatives and evaluate the cost after propagating the dynamics forward
-    uPrims = [-7, -3, 0, 3, 7]
-    minCost = 999999
-    bestPrims = [0, 0, 0, 0]
+    uPrims = [-7, -3, 0, 3, 7] # TODO: Maybe include smaller primitives also?
+    minCost = None
+    bestPrims = None
     dt = 0.1
     print()
     # For each combination of primitives
-    for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
-        newState = state
-        # Propagate dynamics 3x
-        for _ in range(1):
-            newState = stepDynamics(newState, np.array([
-                commands[0]+frontRightDU,
-                commands[1]+frontLeftDU,
-                commands[2]+backLeftDU,
-                commands[3]+backRightDU]), dt)
-        primCost = cost(newState)
-        print(newState)
-        # Find the min
-        if primCost < minCost:
-            minCost = primCost
-            bestPrims = [frontRightDU, frontLeftDU, backLeftDU, backRightDU]
+    # This should be much faster
+    with ThreadPoolExecutor(20) as exec:
+        steps = exec.map(step(state, commands, dt), product(uPrims, repeat=4))
+        _, bestPrims = min(steps, key=(lambda cost, _ : cost))
+
+    # for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
+    #     newState = state
+    #     # Propagate dynamics 3x
+    #     new_com = np.array([
+    #         commands[0]+frontRightDU,
+    #         commands[1]+frontLeftDU,
+    #         commands[2]+backLeftDU,
+    #         commands[3]+backRightDU])
+    #     for _ in range(1):
+    #         newState = stepDynamics(newState, new_com, dt)
+    #     primCost = cost(newState)
+    #     print(newState)
+    #     # Find the min
+    #     if minCost is None or primCost < minCost:
+    #         minCost = primCost
+    #         bestPrims = new_com
 
     retArr = Float64MultiArray()
-    retArr.data = [
-        commands[0]+bestPrims[0],
-        commands[1]+bestPrims[1],
-        commands[2]+bestPrims[2],
-        commands[3]+bestPrims[3]]
-    global coms
-    coms = np.array([
-        commands[0]+bestPrims[0],
-        commands[1]+bestPrims[1],
-        commands[2]+bestPrims[2],
-        commands[3]+bestPrims[3]])
+    retArr.data = bestPrims.tolist()
+    coms = bestPrims
     return retArr
 
 # ---------------------------------------------------
@@ -230,8 +250,6 @@ def processGoal(msg):
     goalZ = msg.data[2]
     goalYaw = msg.data[3]
 
-
-global coms
 coms = np.array([50, -50, 50, -50])
 print("here")
 
