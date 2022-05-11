@@ -8,7 +8,7 @@ from geometry_msgs.msg import Pose
 from tf.transformations import euler_from_quaternion
 import numpy as np
 from itertools import product
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from multiprocessing.pool import ThreadPool
 
 goalX = 0
 goalY = 0
@@ -149,7 +149,7 @@ def cost(state):
     return cost
 
 def step(state, commands, dt):
-    def func(frontRightDU, frontLeftDU, backRightDU, backLeftDU):
+    def func((frontRightDU, frontLeftDU, backRightDU, backLeftDU)):
         newState = state
         # Propagate dynamics 3x
         new_com = np.array([
@@ -172,9 +172,10 @@ def MPC(state, commands):
     print()
     # For each combination of primitives
     # This should be much faster
-    with ThreadPoolExecutor(20) as exec:
-        steps = exec.map(step(state, commands, dt), product(uPrims, repeat=4))
-        _, bestPrims = min(steps, key=(lambda cost, _ : cost))
+
+    with ThreadPool(20) as pool:
+        steps = pool.map(step(state, commands, dt), product(uPrims, repeat=4))
+        _, bestPrims = min(steps, key=(lambda (cost, _) : cost))
 
     # for frontRightDU, frontLeftDU, backRightDU, backLeftDU in product(uPrims, repeat=4):
     #     newState = state
